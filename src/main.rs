@@ -1,86 +1,76 @@
 use std::env;
 use std::fs::File;
-use std::io;
+use std::io::BufWriter;
 use std::io::Read;
+use std::io::Write;
+use std::process::{Command, Stdio};
 
 pub struct Machine<'a> {
-    buffer: Vec<i64>,
     program: &'a [u8],
     pc: usize,
-    ptr: usize,
-    loop_pos: Vec<usize>,
+    outfile: BufWriter<File>,
+}
+
+impl<'a> Drop for Machine<'a> {
+    fn drop(&mut self) {
+        writeln!(self.outfile, "    putchar('\\n');").unwrap();
+        writeln!(self.outfile, "    return 0;").unwrap();
+        writeln!(self.outfile, "}}").unwrap();
+    }
 }
 
 impl<'a> Machine<'a> {
-    pub fn new(program: &[u8]) -> Machine {
+    pub fn new(program: &'a [u8]) -> Machine {
+        let mut outfile =
+            BufWriter::new(File::create("output.cpp").expect("failed to create output.cpp"));
+        writeln!(outfile, "#include <bits/stdc++.h>").unwrap();
+        writeln!(outfile, "int main() {{").unwrap();
+        writeln!(outfile, "    std::vector<int> buffer;").unwrap();
+        writeln!(outfile, "    size_t ptr = 0;").unwrap();
         Machine {
-            buffer: Vec::new(),
             program: program,
             pc: 0,
-            ptr: 0,
-            loop_pos: Vec::new(),
+            outfile: outfile,
         }
     }
 
     pub fn forward_ptr(&mut self) {
-        self.ptr += 1;
+        writeln!(self.outfile, "    ++ptr;").unwrap();
     }
 
     pub fn backward_ptr(&mut self) {
-        if self.ptr == 0 {
-            panic!("instruction pointer must not be negative!");
-        }
-        self.ptr -= 1;
+        writeln!(self.outfile, "    --ptr;").unwrap();
     }
 
     pub fn inc(&mut self) {
         self.realloc();
-        self.buffer[self.ptr] += 1;
+        writeln!(self.outfile, "    buffer[ptr]++;").unwrap();
     }
 
     pub fn dec(&mut self) {
         self.realloc();
-        self.buffer[self.ptr] -= 1;
+        writeln!(self.outfile, "    buffer[ptr]--;").unwrap();
     }
 
-    pub fn output(&self) {
-        print!("{}", self.buffer[self.ptr] as u8 as char);
+    pub fn output(&mut self) {
+        writeln!(self.outfile, "    putchar(buffer[ptr]);").unwrap()
     }
 
     pub fn input(&mut self) {
         self.realloc();
-        let mut cha = [' ' as u8];
-        let stdin = io::stdin();
-        stdin
-            .lock()
-            .read_exact(&mut cha)
-            .expect("input not supplied");
-        self.buffer[self.ptr] = cha[0] as i64;
+        writeln!(self.outfile, "    buffer[ptr] = getchar();").unwrap();
     }
 
     pub fn loop_begin(&mut self) {
-        if self.buffer[self.ptr] != 0 {
-            self.loop_pos.push(self.pc - 1);
-        } else {
-            let mut level = 1;
-            while level != 0 {
-                match self.eat(None).expect("no matching `end of loop`") {
-                    '[' => level += 1,
-                    ']' => level -= 1,
-                    _ => {}
-                }
-            }
-        }
+        writeln!(self.outfile, "    while (buffer[ptr]) {{").unwrap();
     }
 
     pub fn loop_end(&mut self) {
-        self.pc = self.loop_pos
-            .pop()
-            .expect("internal error: no more `beginning of loop`.");
+        writeln!(self.outfile, "}}").unwrap();
     }
 
     pub fn step(&mut self) -> bool {
-        if let Some(ch) = self.eat(None) {
+        if let Some(ch) = self.eat() {
             // eprintln!("current pc is {}, is {}", self.pc, ch);
             match ch {
                 '>' => self.forward_ptr(),
@@ -100,19 +90,16 @@ impl<'a> Machine<'a> {
     }
 
     fn realloc(&mut self) {
-        if self.ptr >= self.buffer.len() {
-            self.buffer.resize(self.ptr + 1, 0);
-        }
+        writeln!(self.outfile, "    if (ptr >= buffer.size()) {{").unwrap();
+        writeln!(self.outfile, "        buffer.resize(ptr + 1);").unwrap();
+        writeln!(self.outfile, "    }}").unwrap();
     }
 
-    fn eat(&mut self, expect: Option<char>) -> Option<char> {
+    fn eat(&mut self) -> Option<char> {
         if self.pc >= self.program.len() {
             None
         } else {
             let res = self.program[self.pc] as char;
-            if let Some(expect) = expect {
-                assert_eq!(res, expect);
-            }
             self.pc += 1;
             Some(res)
         }
@@ -132,5 +119,15 @@ fn main() {
         .expect("failed to get contents of program file.");
     let mut machine = Machine::new(program.as_bytes());
     while machine.step() {}
-    println!("");
+    drop(machine);
+
+    Command::new("g++")
+        .arg("-o")
+        .arg("output")
+        .arg("output.cpp")
+        .stdin(Stdio::inherit())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .output()
+        .unwrap();
 }
